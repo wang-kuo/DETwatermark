@@ -3,10 +3,14 @@
 // 1. runVisionVotes(): asks every available VISION model (GPT-4o, Gemini) one
 //    combined forensic question and collects each model's structured answer.
 // 2. aggregate(): fuses those votes with Sightengine's numeric signals, then
-//    uses DeepSeek (text-only) as a forensic JUDGE to decide the final
-//    watermark vendor and real/fake-face verdict. Falls back to deterministic
-//    majority voting if DeepSeek is unavailable. DeepSeek's opinion is also
-//    surfaced as an explicit vote + judge block for transparency.
+//    uses DeepSeek (text-only) as a forensic JUDGE for the real/fake-face
+//    verdict. Falls back to deterministic majority voting if DeepSeek is
+//    unavailable.
+//
+// Watermark detection here is presence-only (visible watermark / logo / badge);
+// it deliberately does NOT try to attribute a vendor — LLMs can't reliably tell
+// which company a watermark belongs to (and can't see invisible watermarks like
+// SynthID at all). Provenance/vendor is better answered by C2PA/IPTC metadata.
 //
 // Hard rule (enforced in code, not left to a model): if the image is
 // AI-generated, any face is fake.
@@ -28,7 +32,6 @@ import type {
   FaceAttributes,
   FaceResult,
   Spectrum,
-  VendorVote,
   WatermarkResult,
 } from "./types";
 
@@ -42,8 +45,6 @@ const VISION_PROMPT = `You are a forensic image analyst. Inspect the image and r
     "has_watermark": boolean,            // any visible watermark, semi-transparent logo, platform badge, or overlaid text
     "type": "visible" | "invisible" | "none",
     "location": "short description, or none",
-    "vendor": "the company/platform/tool the watermark belongs to if identifiable (e.g. OpenAI, Google, Midjourney, Stable Diffusion, Adobe Firefly, Meta, TikTok, Getty, Shutterstock), otherwise unknown or none",
-    "vendor_reason": "brief visual evidence for the vendor",
     "confidence": 0.0
   },
   "face": {
@@ -79,8 +80,6 @@ export interface VisionVote {
     has_watermark?: boolean;
     type?: string;
     location?: string;
-    vendor?: string;
-    vendor_reason?: string;
     confidence?: number;
   };
   face?: {
@@ -140,12 +139,7 @@ export async function aggregate(
 ): Promise<AggregateOutput> {
   const anyModel = votes.length > 0;
 
-  // --- Watermark votes (vision) ---
-  const vendorVotes: VendorVote[] = votes.map((v) => ({
-    model: v.model,
-    vendor: normVendor(v.watermark?.vendor),
-    reasoning: v.watermark?.vendor_reason ?? "",
-  }));
+  // --- Watermark (presence only) ---
   const wmFlags = votes.map((v) => Boolean(v.watermark?.has_watermark));
   const hasWatermark =
     wmFlags.length > 0 &&
@@ -184,30 +178,20 @@ export async function aggregate(
     attackVotes.filter((a) => a.is_attack).length * 2 > attackVotes.length;
   const detAttackType = pickAttackType(attackVotes);
 
-  // --- DeepSeek judge ---
+  // --- DeepSeek judge (face authenticity) ---
   const { verdict: judged, error: judgeError } =
     anyModel && hasDeepSeek()
       ? await deepseekJudge(votes, signals)
       : { verdict: null, error: null };
 
-  // Surface DeepSeek's own opinion as explicit votes (transparency).
-  if (judged) {
-    const dsVendor = normVendor(judged.watermark_vendor);
-    if (dsVendor && dsVendor !== "Unknown") {
-      vendorVotes.push({
-        model: "deepseek",
-        vendor: dsVendor,
-        reasoning: judged.reasoning ?? "",
-      });
-    }
-    if (facePresent && typeof judged.is_attack === "boolean") {
-      attackVotes.push({
-        source: "deepseek",
-        is_attack: judged.is_attack,
-        attack_type: normAttack(judged.attack_type),
-        reasoning: judged.reasoning ?? "",
-      });
-    }
+  // Surface DeepSeek's own attack opinion as an explicit vote (transparency).
+  if (judged && facePresent && typeof judged.is_attack === "boolean") {
+    attackVotes.push({
+      source: "deepseek",
+      is_attack: judged.is_attack,
+      attack_type: normAttack(judged.attack_type),
+      reasoning: judged.reasoning ?? "",
+    });
   }
 
   let isAttack = judged?.is_attack ?? detAttack;
@@ -238,18 +222,6 @@ export async function aggregate(
     });
   }
 
-  // A text-only judge's "Unknown" must not override a concrete vendor the vision
-  // models actually saw — only let the judge win when it names a real vendor.
-  const judgeVendor = normVendor(judged?.watermark_vendor);
-  const vendorFinal = hasWatermark
-    ? judgeVendor && judgeVendor !== "Unknown"
-      ? judgeVendor
-      : majorityVendor(vendorVotes)
-    : null;
-  const vendorConf = hasWatermark
-    ? clamp01(judged?.watermark_vendor_confidence) || 0.5
-    : 0;
-
   // Attributes only when we have a face and it's not synthetic.
   const attributes =
     facePresent && !aiOverride
@@ -261,10 +233,7 @@ export async function aggregate(
     type: hasWatermark ? wmType : "none",
     location: hasWatermark ? wmLocation : "none",
     confidence: wmConfidence,
-    vendor: vendorFinal,
-    vendor_confidence: vendorConf,
-    vendor_votes: vendorVotes,
-    notes: anyModel ? (judged?.reasoning ?? "") : "no vision model responded",
+    notes: anyModel ? "" : "no vision model responded",
     mock: !anyModel,
   };
 
@@ -295,9 +264,6 @@ export async function aggregate(
 // --- DeepSeek judge --------------------------------------------------------
 
 interface JudgeVerdict {
-  watermark_present?: boolean;
-  watermark_vendor?: string;
-  watermark_vendor_confidence?: number;
   spectrum?: string;
   is_attack?: boolean;
   attack_type?: string;
@@ -323,12 +289,11 @@ async function deepseekJudge(
   const user = `Evidence (JSON):
 ${JSON.stringify(evidence)}
 
-Decide the final verdicts. Rules:
+Decide the final face verdicts. Rules:
 - If sightengine.ai_generated >= ${AI_GEN_THRESHOLD} and a face is present, the face is FAKE (is_real_face=false).
-- Identify the watermark vendor by weighing the vision models' vendor guesses; use "Unknown" if a watermark exists but the source is unclear.
 - Decide any presentation attack (paper / replay / 3d_mask) by weighing the votes.
 Reply with ONLY this JSON ("verdict_confidence" = how confident you are in the is_real_face decision, 0..1):
-{ "watermark_present": boolean, "watermark_vendor": "string or none", "watermark_vendor_confidence": 0.0, "spectrum": "visible|nir|unknown", "is_attack": boolean, "attack_type": "paper|replay|3d_mask|none|unknown", "is_real_face": boolean, "verdict_confidence": 0.0, "reasoning": "1-2 sentences" }`;
+{ "spectrum": "visible|nir|unknown", "is_attack": boolean, "attack_type": "paper|replay|3d_mask|none|unknown", "is_real_face": boolean, "verdict_confidence": 0.0, "reasoning": "1-2 sentences" }`;
 
   try {
     const text = await callDeepSeekText(system, user, DEEPSEEK_MODEL);
@@ -376,35 +341,6 @@ function normFaceAttributes(a?: VisionFaceAttrs): FaceAttributes | null {
     facial_hair: typeof a.facial_hair === "boolean" ? a.facial_hair : null,
   };
   return Object.values(result).some((v) => v !== null) ? result : null;
-}
-
-function normVendor(v?: string | null): string | null {
-  if (!v) return null;
-  const s = v.trim();
-  if (!s || /^(none|n\/?a)$/i.test(s)) return null;
-  if (/^unknown$/i.test(s)) return "Unknown";
-  return s;
-}
-
-function majorityVendor(votes: VendorVote[]): string | null {
-  const tally = new Map<string, number>();
-  for (const v of votes) {
-    if (!v.vendor || v.vendor === "Unknown") continue;
-    const key = v.vendor.toLowerCase();
-    tally.set(key, (tally.get(key) ?? 0) + 1);
-  }
-  let best: string | null = null;
-  let bestCount = 0;
-  for (const v of votes) {
-    if (!v.vendor || v.vendor === "Unknown") continue;
-    const c = tally.get(v.vendor.toLowerCase()) ?? 0;
-    if (c > bestCount) {
-      best = v.vendor;
-      bestCount = c;
-    }
-  }
-  if (best) return best;
-  return votes.some((v) => v.vendor) ? "Unknown" : null;
 }
 
 function normWmType(t?: string): "visible" | "invisible" | "none" {

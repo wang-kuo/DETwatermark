@@ -50,7 +50,7 @@ export default function ResultCard({
         <Stat label="Deepfake" value={deepfakeLabel(face_result)} />
       </div>
 
-      <Details w={watermark_result} f={face_result} imageUrl={imageUrl} />
+      <Details f={face_result} imageUrl={imageUrl} />
     </section>
   );
 }
@@ -81,14 +81,6 @@ function WatermarkHero({ w }: { w: WatermarkResult }) {
 
       {detected ? (
         <>
-          <div className="mt-3">
-            <div className="font-mono text-[11px] uppercase tracking-widest text-white/40">
-              Source
-            </div>
-            <div className="mt-1 inline-flex items-center rounded-md border border-accent/50 bg-accent/10 px-2.5 py-1 text-sm font-semibold text-accent shadow-[0_0_20px_-6px_var(--accent)]">
-              {w.vendor ?? "Unknown"}
-            </div>
-          </div>
           <div className="mt-3 text-xs text-white/55">
             Type: {w.type}
             {w.location !== "none" ? ` · ${w.location}` : ""}
@@ -162,15 +154,12 @@ function FaceHero({ f }: { f: FaceResult }) {
 // --- Details ---------------------------------------------------------------
 
 function Details({
-  w,
   f,
   imageUrl,
 }: {
-  w: WatermarkResult;
   f: FaceResult;
   imageUrl?: string | null;
 }) {
-  const showVendorVotes = w.has_watermark && (w.vendor_votes ?? []).length > 0;
   return (
     <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
       {f.attributes && !f.ai_generated_override && (
@@ -178,24 +167,6 @@ function Details({
       )}
 
       <DetectedFaces faces={f.faces ?? []} imageUrl={imageUrl} />
-
-      {showVendorVotes && (
-        <Block title="Watermark vendor — model votes">
-          <ul className="space-y-1.5">
-            {(w.vendor_votes ?? []).map((v, i) => (
-              <li key={i} className="flex items-start justify-between gap-3 text-xs">
-                <span className="font-mono text-white/45">{v.model}</span>
-                <span className="flex-1 text-right text-white/70">
-                  <span className="font-semibold text-accent">{v.vendor ?? "—"}</span>
-                  {v.reasoning ? (
-                    <span className="block text-white/40">{v.reasoning}</span>
-                  ) : null}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Block>
-      )}
 
       {f.face_present && (f.attack_votes ?? []).length > 0 && (
         <Block title="Attack detection — source votes">

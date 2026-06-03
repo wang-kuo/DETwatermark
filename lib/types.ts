@@ -23,23 +23,14 @@ export interface DetectedFace {
 
 // --- Watermark -------------------------------------------------------------
 
-/** One model's guess at which vendor a watermark belongs to. */
-export interface VendorVote {
-  model: string; // "gpt-4o" | "gemini-2.5-flash" | "deepseek"
-  vendor: string | null;
-  reasoning: string;
-}
-
+// Presence-only: whether a VISIBLE watermark/logo/badge is present. Vendor
+// attribution was removed — LLMs can't reliably tell which company a watermark
+// belongs to, and can't see invisible watermarks (e.g. SynthID) at all.
 export interface WatermarkResult {
   has_watermark: boolean;
   type: "visible" | "invisible" | "none";
   location: string;
   confidence: number;
-  /** Final identified vendor/company behind the watermark (null if none). */
-  vendor: string | null;
-  vendor_confidence: number;
-  /** Per-model vendor guesses that fed the final decision. */
-  vendor_votes: VendorVote[];
   notes: string;
   mock: boolean;
 }

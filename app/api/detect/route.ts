@@ -15,9 +15,10 @@ import {
   isSupabaseConfigured,
 } from "@/lib/supabase";
 import { sha256 } from "@/lib/hash";
-import { runSightengine } from "@/lib/sightengine";
+import { runSightengineSafe } from "@/lib/sightengine";
 import { aggregate, runVisionVotes } from "@/lib/analyze";
 import type { DetectionResponse } from "@/lib/types";
+import convert from "heic-convert";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // detection calls several external APIs
@@ -90,7 +91,6 @@ export async function POST(req: Request) {
       existing.watermark_result &&
       Array.isArray(existing.face_result.faces) &&
       Array.isArray(existing.face_result.attack_votes) &&
-      Array.isArray(existing.watermark_result.vendor_votes) &&
       // new shape marker — re-detect rows written before judge/attributes fields
       existing.face_result.judge_used !== undefined;
     if (fullShape) {
@@ -108,12 +108,26 @@ export async function POST(req: Request) {
     await admin.from("detections").delete().eq("image_hash", serverHash);
   }
 
+  // iPhone HEIC -> JPEG on the server. Browsers can't decode HEIC without an
+  // eval-based WASM lib (which a CSP may block), so we do it here. Runs AFTER
+  // hashing/dedup so image_hash matches exactly what the client uploaded.
+  let imgBytes: Uint8Array;
+  let imgMime: string;
+  try {
+    ({ bytes: imgBytes, mime: imgMime } = await ensureJpeg(bytes, file.type, file.name));
+  } catch {
+    return NextResponse.json(
+      { error: "Couldn't read this HEIC image. Try exporting it as JPEG." },
+      { status: 400 },
+    );
+  }
+
   // 4. Upload to the private Storage bucket.
-  const storagePath = `${user.id}/${serverHash}${extFromMime(file.type)}`;
+  const storagePath = `${user.id}/${serverHash}${extFromMime(imgMime)}`;
   const { error: uploadErr } = await admin.storage
     .from(STORAGE_BUCKET)
-    .upload(storagePath, bytes, {
-      contentType: file.type || "application/octet-stream",
+    .upload(storagePath, imgBytes, {
+      contentType: imgMime || "application/octet-stream",
       upsert: true,
     });
   if (uploadErr) {
@@ -127,8 +141,8 @@ export async function POST(req: Request) {
 
   // 5. Detect: Sightengine + vision-model votes in parallel, then judge.
   const [sight, votes] = await Promise.all([
-    runSightengine(bytes, file.type),
-    runVisionVotes(bytes, file.type),
+    runSightengineSafe(imgBytes, imgMime),
+    runVisionVotes(imgBytes, imgMime),
   ]);
   const { watermark, face } = await aggregate(votes, {
     aiGenerated: sight.genai.ai_generated,
@@ -174,4 +188,34 @@ function extFromMime(mime: string): string {
     default:
       return "";
   }
+}
+
+function isHeicBytes(b: Uint8Array): boolean {
+  if (b.length < 12) return false;
+  if (String.fromCharCode(b[4], b[5], b[6], b[7]) !== "ftyp") return false;
+  const brand = String.fromCharCode(b[8], b[9], b[10], b[11]).toLowerCase();
+  return [
+    "heic", "heix", "heim", "heis",
+    "hevc", "hevx", "hevm", "hevs",
+    "mif1", "msf1", "heif",
+  ].includes(brand);
+}
+
+/** Convert iPhone HEIC/HEIF to JPEG on the server; pass other formats through. */
+async function ensureJpeg(
+  bytes: Uint8Array,
+  mime: string,
+  name: string,
+): Promise<{ bytes: Uint8Array; mime: string }> {
+  const heic =
+    /image\/hei[cf]/i.test(mime) ||
+    /\.(heic|heif)$/i.test(name) ||
+    isHeicBytes(bytes);
+  if (!heic) return { bytes, mime };
+  const out = await convert({
+    buffer: Buffer.from(bytes),
+    format: "JPEG",
+    quality: 0.9,
+  });
+  return { bytes: new Uint8Array(out), mime: "image/jpeg" };
 }
