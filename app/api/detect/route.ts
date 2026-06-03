@@ -1,8 +1,12 @@
-// POST /api/detect  (BLUEPRINT §6)
+// POST /api/detect
 //   in : multipart/form-data { file: image, hash: sha256-from-client }
 //   out: DetectionResponse
 //
-// Flow: auth → re-hash → dedup by hash → upload → parallel detect → insert.
+// Flow: auth → re-hash → dedup by hash → upload → multi-model detect → persist.
+//
+// Detection fans out: Sightengine (genai + faces + deepfake) and the vision
+// LLMs (GPT-4o + Gemini) run in parallel; DeepSeek then judges the combined
+// evidence (lib/analyze.ts).
 
 import { NextResponse } from "next/server";
 import {
@@ -12,26 +16,27 @@ import {
 } from "@/lib/supabase";
 import { sha256 } from "@/lib/hash";
 import { runSightengine } from "@/lib/sightengine";
-import { detectWatermark } from "@/lib/watermark";
+import { aggregate, runVisionVotes } from "@/lib/analyze";
 import type { DetectionResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const maxDuration = 60; // detection calls several external APIs
 
 const STORAGE_BUCKET = "uploads";
 
 export async function POST(req: Request) {
   if (!isSupabaseConfigured()) {
-    return NextResponse.json({ error: "Supabase 未配置" }, { status: 500 });
+    return NextResponse.json({ error: "Supabase is not configured" }, { status: 500 });
   }
 
-  // 1. Auth — require a valid session (anonymous or otherwise).
+  // 1. Auth.
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json(
-      { error: "未登录,请先用邀请码登录" },
+      { error: "Not signed in — enter an invite code first" },
       { status: 401 },
     );
   }
@@ -42,14 +47,14 @@ export async function POST(req: Request) {
     form = await req.formData();
   } catch {
     return NextResponse.json(
-      { error: "请求必须是 multipart/form-data" },
+      { error: "Request must be multipart/form-data" },
       { status: 400 },
     );
   }
   const file = form.get("file");
   const clientHash = form.get("hash");
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "缺少图片文件" }, { status: 400 });
+    return NextResponse.json({ error: "Missing image file" }, { status: 400 });
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -62,7 +67,7 @@ export async function POST(req: Request) {
     clientHash !== serverHash
   ) {
     return NextResponse.json(
-      { error: "哈希校验失败,文件可能在传输中被篡改" },
+      { error: "Hash mismatch — the file may have been altered in transit" },
       { status: 400 },
     );
   }
@@ -79,14 +84,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: dedupErr.message }, { status: 500 });
   }
   if (existing) {
-    const cached: DetectionResponse = {
-      cached: true,
-      image_hash: existing.image_hash,
-      genai_result: existing.genai_result,
-      face_result: existing.face_result,
-      watermark_result: existing.watermark_result,
-    };
-    return NextResponse.json(cached);
+    const fullShape =
+      existing.genai_result &&
+      existing.face_result &&
+      existing.watermark_result &&
+      Array.isArray(existing.face_result.faces) &&
+      Array.isArray(existing.face_result.attack_votes) &&
+      Array.isArray(existing.watermark_result.vendor_votes) &&
+      // new shape marker — re-detect rows written before judge/attributes fields
+      existing.face_result.judge_used !== undefined;
+    if (fullShape) {
+      const cached: DetectionResponse = {
+        cached: true,
+        image_hash: existing.image_hash,
+        genai_result: existing.genai_result,
+        face_result: existing.face_result,
+        watermark_result: existing.watermark_result,
+      };
+      return NextResponse.json(cached);
+    }
+    // Stale / partial row (e.g. manually seeded or written by an older shape):
+    // drop it and re-detect so the client never receives a malformed payload.
+    await admin.from("detections").delete().eq("image_hash", serverHash);
   }
 
   // 4. Upload to the private Storage bucket.
@@ -100,27 +119,31 @@ export async function POST(req: Request) {
   if (uploadErr) {
     return NextResponse.json(
       {
-        error: `上传失败: ${uploadErr.message}(请确认已创建名为 "${STORAGE_BUCKET}" 的私有 Storage bucket)`,
+        error: `Upload failed: ${uploadErr.message} (make sure a private Storage bucket named "${STORAGE_BUCKET}" exists)`,
       },
       { status: 500 },
     );
   }
 
-  // 5. Run the detectors in parallel (BLUEPRINT §6.5).
-  const [sight, watermark] = await Promise.all([
+  // 5. Detect: Sightengine + vision-model votes in parallel, then judge.
+  const [sight, votes] = await Promise.all([
     runSightengine(bytes, file.type),
-    detectWatermark(bytes, file.type),
+    runVisionVotes(bytes, file.type),
   ]);
+  const { watermark, face } = await aggregate(votes, {
+    aiGenerated: sight.genai.ai_generated,
+    deepfakeScore: sight.deepfake_score,
+    sightFaces: sight.faces,
+  });
 
-  // 6. Persist the detection. image_hash is UNIQUE; a concurrent duplicate
-  //    insert will fail here, which is acceptable for the demo.
+  // 6. Persist (image_hash is UNIQUE; a concurrent duplicate insert will fail).
   const { error: insertErr } = await admin.from("detections").insert({
     user_id: user.id,
     image_hash: serverHash,
     storage_path: storagePath,
     mime_type: file.type,
     genai_result: sight.genai,
-    face_result: sight.face,
+    face_result: face,
     watermark_result: watermark,
   });
   if (insertErr) {
@@ -132,7 +155,7 @@ export async function POST(req: Request) {
     cached: false,
     image_hash: serverHash,
     genai_result: sight.genai,
-    face_result: sight.face,
+    face_result: face,
     watermark_result: watermark,
   };
   return NextResponse.json(response);

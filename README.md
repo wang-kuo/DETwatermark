@@ -1,7 +1,7 @@
 # 图像检测 Demo (DETwatermark)
 
-Next.js (Vercel) + Supabase 全栈 demo。用户凭**邀请码**登录,上传图片后调用检测 API 判断
-**水印 / 人脸 / AI 生成 / spoofing**,结果以 `sha256` 去重后存入 Supabase。
+Next.js (Vercel) + Supabase 全栈 demo。用户凭**邀请码**登录,上传图片后由多模型投票判断
+**水印(含厂商识别)/ AI 生成 / 人脸真伪(真脸 vs 攻击)**,结果以 `sha256` 去重后存入 Supabase。
 
 > 设计与取舍详见 [`BLUEPRINT.md`](./BLUEPRINT.md)。
 
@@ -11,16 +11,16 @@ Next.js (Vercel) + Supabase 全栈 demo。用户凭**邀请码**登录,上传图
 |---|---|
 | 前端 / 后端 | Next.js 16 (App Router) + TypeScript + Tailwind v4 |
 | 数据库 / 存储 / 认证 | Supabase (Postgres + Storage + Auth) |
-| AI 生成 + 人脸 + deepfake | Sightengine API |
-| 水印检测 | 多模态大模型 VQA(Gemini 2.5 Flash 或 GPT-4o) |
+| AI 生成 + 人脸框 + deepfake | Sightengine API |
+| 水印 + 厂商识别 + 人脸真伪 | 多模型投票:GPT-4o + Gemini 2.5 Flash(视觉)+ DeepSeek(文本裁决) |
 
 > 蓝图标的是「Next.js 14+」,这里用 `create-next-app@latest` 生成的是 Next 16 + React 19,
 > 已按 Next 15+ 的 **async `cookies()`** 写法接好 Supabase SSR。
 
-## 当前状态:骨架可跑,外部 API 留 TODO
+## 当前状态
 
-- ✅ 前后端骨架、路由、页面、类型已完整,`npm run dev` / `npm run build` 可编译通过。
-- ⏳ Sightengine 与大模型 VQA 为「真实调用形态 + 占位 mock」:**未配置密钥时返回带 `mock` 标记的占位结果**,配置后自动走真实调用。代码里有 `TODO:` 标注需要核对的字段。
+- ✅ 前后端、多模型检测管线、UI 已完整,`npm run dev` / `npm run build` 可编译通过。
+- ✅ 外部 API 走真实调用(Sightengine / GPT-4o / Gemini / DeepSeek)。**未配置某个密钥时该来源自动退化**(返回 `mock` 或跳过该票),其余模型继续投票,不影响整体出结果。
 
 ---
 
@@ -87,27 +87,26 @@ npm run dev
 ```
 
 打开 <http://localhost:3000> → 自动跳到 `/login` → 输入邀请码(如 `DEMO-2025`)→ 进入 `/dashboard`
-→ 选图 → 「开始检测」。
+→ 选图 → **Run Analysis**。
 
-- 未配置 Sightengine / 大模型密钥时,结果卡片里的相应项带 **`mock`** 标记。
+- 未配置 Sightengine / 某个大模型密钥时,结果卡片里相应项带 **`mock`** 标记或跳过该票。
 - 同一张图第二次检测会显示**「缓存命中」**(命中 `image_hash` 去重,不再花 API 钱)。
 
 ---
 
-## 接通外部 API(拿到密钥后)
+## 检测管线与外部 API
 
-| 能力 | 文件 | 要做的事 |
+| 能力 | 文件 | 说明 |
 |---|---|---|
-| AI 生成 / 人脸 / deepfake | `lib/sightengine.ts` | 填 `SIGHTENGINE_USER/SECRET`;核对 `normalize()` 里各模型的响应字段路径(见 `TODO`)。 |
-| 水印 VQA | `lib/watermark.ts` | 填 `GOOGLE_API_KEY`(Gemini)或 `OPENAI_API_KEY`(GPT-4o);核对模型 id 与响应结构(见 `TODO`)。 |
+| AI 生成 / 人脸框 / deepfake | `lib/sightengine.ts` | Sightengine 一次调用合并 `genai + face-attributes + deepfake`。 |
+| 视觉投票(水印 + 厂商 + 人脸/光谱/攻击) | `lib/llm.ts` · `lib/analyze.ts` | GPT-4o 与 Gemini 各自给出结构化判断。 |
+| 文本裁决(聚合多模型 + 厂商识别) | `lib/analyze.ts`(DeepSeek) | DeepSeek 仅文本,聚合视觉投票并裁决最终水印厂商与真假脸。 |
+
+**判定规则**:`ai_generated ≥ 0.5` 且检出人脸 ⇒ 直接判**假脸**(代码层硬规则,裁决模型不可推翻);
+否则由 GPT-4o / Gemini / Sightengine 多源**投票**决定是否为攻击(paper / replay / 3D mask),
+并输出人脸属性、光谱(可见光 / 近红外)、人脸位置与最终真假脸结论。
 
 密钥都只在 **API Route(服务端)** 读取;前端只调自家 `/api/*`,永远拿不到密钥。
-
-### Spoofing 的现实边界(重要)
-
-单张静态图**无法可靠**做活体 / 呈现攻击检测(面具 / 纸张 / 回放)。Sightengine 的 `deepfake`
-针对**数字换脸**,不是物理 PAD。因此 UI 上该项标注为「实验性,单张静态图不可靠」。真正的活体
-检测需视频流或引导式多帧采集——属后续扩展项。
 
 ---
 
@@ -116,7 +115,7 @@ npm run dev
 1. 把仓库推到 GitHub。
 2. <https://vercel.com/new> 导入该仓库(框架自动识别为 Next.js)。
 3. **Settings → Environment Variables**:把 `.env.local` 里的每一项都加进去
-   (`NEXT_PUBLIC_*`、`SUPABASE_SERVICE_ROLE_KEY`、`SIGHTENGINE_*`、`GOOGLE_API_KEY` 等)。
+   (`NEXT_PUBLIC_*`、`SUPABASE_SERVICE_ROLE_KEY`、`SIGHTENGINE_*`、`OPENAI_API_KEY`、`GOOGLE_API_KEY`、`DEEPSEEK_API_KEY`)。
 4. Deploy。后续 push 自动重新部署。
 
 > 注意:`SUPABASE_SERVICE_ROLE_KEY` 与各密钥在 Vercel 里是普通(加密)环境变量,**不要**加
@@ -138,11 +137,12 @@ lib/
   supabase.ts              # browser / server(cookie) / admin(service-role) 三个工厂
   hash.ts                  # 通用 sha256(浏览器 + Node)
   sightengine.ts           # Sightengine 封装(genai + face + deepfake)
-  watermark.ts             # 大模型 VQA 封装(Gemini / OpenAI)
+  llm.ts                   # GPT-4o / Gemini(视觉)+ DeepSeek(文本)调用封装
+  analyze.ts               # 多模型投票 + DeepSeek 裁决 + AI-gen 硬规则
   types.ts                 # 共享结果类型
 components/
   ImageUploader.tsx        # 选图 / 算 hash / 调 /api/detect
-  ResultCard.tsx           # 结果展示(spoofing 标「实验性」)
+  ResultCard.tsx           # 结果卡片(高亮水印 / 厂商 / 真假脸)
 supabase/schema.sql        # 建表 + RLS,蓝图 §4
 ```
 

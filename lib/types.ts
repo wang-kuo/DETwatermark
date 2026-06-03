@@ -1,13 +1,8 @@
-// Shared result types used across API routes, lib wrappers and UI components.
-// Keeping them in one place guarantees the server (what gets stored in the
-// `detections` jsonb columns) and the client (what `ResultCard` renders) stay
-// in sync.
+// Shared result types across API routes, lib analysis, and UI.
 
-/** Sightengine `genai` model — likelihood the image was AI-generated. */
 export interface GenaiResult {
-  /** Probability (0–1) that the image is AI-generated, or null if unknown. */
+  /** Probability (0–1) the image is AI-generated, or null if unknown. */
   ai_generated: number | null;
-  /** True when this is placeholder data (no Sightengine credentials set). */
   mock: boolean;
 }
 
@@ -20,36 +15,85 @@ export interface FaceBox {
 
 export interface DetectedFace {
   box: FaceBox;
-  /** Raw Sightengine face attributes (gender, age, deepfake, …). */
+  /** Raw Sightengine face attributes. */
   attributes: Record<string, unknown>;
-  /** Deepfake / face-manipulation probability (0–1) for this face, if present. */
+  /** Deepfake / face-manipulation probability (0–1) for this face, if available. */
   deepfake: number | null;
 }
 
-/** Sightengine `face-attributes` + `deepfake` models, normalized. */
-export interface FaceResult {
-  faces: DetectedFace[];
-  /** Highest deepfake probability across all detected faces, or null. */
-  deepfake_score: number | null;
-  mock: boolean;
+// --- Watermark -------------------------------------------------------------
+
+/** One model's guess at which vendor a watermark belongs to. */
+export interface VendorVote {
+  model: string; // "gpt-4o" | "gemini-2.5-flash" | "deepseek"
+  vendor: string | null;
+  reasoning: string;
 }
 
-/** Multimodal-LLM watermark VQA output (BLUEPRINT §3.3). */
 export interface WatermarkResult {
   has_watermark: boolean;
   type: "visible" | "invisible" | "none";
-  /** Human description of where the watermark is, or "none". */
   location: string;
-  /** Model confidence 0–1. */
   confidence: number;
+  /** Final identified vendor/company behind the watermark (null if none). */
+  vendor: string | null;
+  vendor_confidence: number;
+  /** Per-model vendor guesses that fed the final decision. */
+  vendor_votes: VendorVote[];
   notes: string;
-  /** True when this is placeholder data (no LLM key set). */
   mock: boolean;
 }
 
-/** Shape returned by `POST /api/detect` and rendered by the dashboard. */
+// --- Face / liveness -------------------------------------------------------
+
+export type AttackType = "paper" | "replay" | "3d_mask" | "none" | "unknown";
+export type Spectrum = "visible" | "nir" | "unknown";
+
+/** One source's vote on whether the face is a presentation attack. */
+export interface AttackVote {
+  source: string; // "gpt-4o" | "gemini-2.5-flash" | "sightengine"
+  is_attack: boolean;
+  attack_type: AttackType;
+  reasoning: string;
+}
+
+/** Structured face attributes (shown when the image is not AI-generated). */
+export interface FaceAttributes {
+  age_range: string | null;
+  gender: string | null;
+  expression: string | null;
+  glasses: boolean | null;
+  headwear: boolean | null;
+  facial_hair: boolean | null;
+}
+
+export interface FaceResult {
+  face_present: boolean;
+  face_count: number;
+  /** Face boxes + per-face attributes/deepfake from Sightengine. */
+  faces: DetectedFace[];
+  /** Visible-light vs near-infrared capture. */
+  spectrum: Spectrum;
+  /** Structured attributes, or null (e.g. when the image is AI-generated). */
+  attributes: FaceAttributes | null;
+  is_attack: boolean;
+  attack_type: AttackType;
+  /** Votes from every source that contributed to the attack decision. */
+  attack_votes: AttackVote[];
+  /** FINAL verdict: is this a genuine, live human face? */
+  is_real_face: boolean;
+  real_face_confidence: number;
+  /** True when the verdict was forced to fake because the image is AI-generated. */
+  ai_generated_override: boolean;
+  reasoning: string;
+  /** DeepSeek judge transparency. */
+  judge_model: string | null;
+  judge_used: boolean;
+  judge_error: string | null;
+  mock: boolean;
+}
+
 export interface DetectionResponse {
-  /** True when the result came from the dedup cache (no API spend). */
   cached: boolean;
   image_hash: string;
   genai_result: GenaiResult;

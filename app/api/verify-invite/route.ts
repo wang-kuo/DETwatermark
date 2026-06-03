@@ -17,7 +17,7 @@ export const runtime = "nodejs";
 export async function POST(req: Request) {
   if (!isSupabaseConfigured()) {
     return NextResponse.json(
-      { ok: false, error: "Supabase 未配置,请先在 .env.local 填入密钥" },
+      { ok: false, error: "Supabase is not configured — fill in .env.local first" },
       { status: 500 },
     );
   }
@@ -40,14 +40,14 @@ export async function POST(req: Request) {
     body = await req.json();
   } catch {
     return NextResponse.json(
-      { ok: false, error: "请求体不是合法 JSON" },
+      { ok: false, error: "Request body is not valid JSON" },
       { status: 400 },
     );
   }
 
   if (typeof body.code !== "string" || body.code.trim() === "") {
     return NextResponse.json(
-      { ok: false, error: "邀请码不能为空" },
+      { ok: false, error: "Invite code is required" },
       { status: 400 },
     );
   }
@@ -70,13 +70,13 @@ export async function POST(req: Request) {
   }
   if (!invite) {
     return NextResponse.json(
-      { ok: false, error: "邀请码无效" },
+      { ok: false, error: "Invalid invite code" },
       { status: 403 },
     );
   }
   if (invite.use_count >= invite.max_uses) {
     return NextResponse.json(
-      { ok: false, error: "邀请码已用尽" },
+      { ok: false, error: "This invite code has been used up" },
       { status: 403 },
     );
   }
@@ -92,7 +92,7 @@ export async function POST(req: Request) {
         ok: false,
         error:
           authErr?.message ??
-          "匿名登录失败,请确认已在 Supabase 控制台开启 Anonymous sign-ins",
+          "Anonymous sign-in failed — enable Anonymous sign-ins in the Supabase dashboard",
       },
       { status: 500 },
     );
