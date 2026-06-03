@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { sha256 } from "@/lib/hash";
+import { runProvenance } from "@/lib/provenance";
 import ResultCard from "./ResultCard";
-import type { DetectionResponse } from "@/lib/types";
+import type { DetectionResponse, ProvenanceResult } from "@/lib/types";
 
 // Keep uploads well under platform body-size limits (Vercel caps function
 // request bodies at ~4.5MB) and keep the vision/Sightengine calls fast & cheap.
@@ -79,15 +80,25 @@ export default function ImageUploader() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DetectionResponse | null>(null);
+  const [clientProvenance, setClientProvenance] = useState<ProvenanceResult | null>(null);
 
   async function onSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const raw = e.target.files?.[0] ?? null;
     setResult(null);
     setError(null);
+    setClientProvenance(null);
     if (!raw) return;
 
     setPreparing(true);
     try {
+      // Read provenance from the ORIGINAL file BEFORE downscaling strips its
+      // metadata/C2PA (exifr is pure JS — no CSP eval issue in the browser).
+      try {
+        setClientProvenance(await runProvenance(new Uint8Array(await raw.arrayBuffer())));
+      } catch {
+        setClientProvenance(null);
+      }
+
       const { file: f, previewable } = await prepare(raw);
       setFile(f);
       setPreviewUrl((prev) => {
@@ -118,6 +129,9 @@ export default function ImageUploader() {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("hash", hash);
+      // Provenance read from the ORIGINAL file (server prefers this over the
+      // downscaled upload, whose metadata may be stripped).
+      if (clientProvenance) fd.append("provenance", JSON.stringify(clientProvenance));
 
       const res = await fetch("/api/detect", { method: "POST", body: fd });
 

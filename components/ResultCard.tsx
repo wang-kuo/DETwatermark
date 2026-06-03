@@ -8,6 +8,7 @@ import type {
   FaceAttributes,
   FaceBox,
   FaceResult,
+  ProvenanceResult,
   Spectrum,
   WatermarkResult,
 } from "@/lib/types";
@@ -19,7 +20,7 @@ export default function ResultCard({
   result: DetectionResponse;
   imageUrl?: string | null;
 }) {
-  const { genai_result, face_result, watermark_result, cached } = result;
+  const { genai_result, face_result, watermark_result, provenance, cached } = result;
   const aiGen = genai_result?.ai_generated ?? null;
 
   return (
@@ -49,6 +50,8 @@ export default function ResultCard({
         <Stat label="Spectrum" value={spectrumLabel(face_result.spectrum)} />
         <Stat label="Deepfake" value={deepfakeLabel(face_result)} />
       </div>
+
+      {provenance && <ProvenancePanel p={provenance} />}
 
       <Details f={face_result} imageUrl={imageUrl} />
     </section>
@@ -322,6 +325,95 @@ function DeepSeekJudge({ f }: { f: FaceResult }) {
       )}
     </Block>
   );
+}
+
+// --- Provenance ------------------------------------------------------------
+
+function ProvenancePanel({ p }: { p: ProvenanceResult }) {
+  const tone = verdictTone(p.verdict);
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+      <div className="flex items-center justify-between gap-2">
+        <Label>Provenance · Content Credentials</Label>
+        <span
+          className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tone.badge}`}
+        >
+          {tone.label}
+        </span>
+      </div>
+      <p className="mt-2 text-xs text-white/60">{p.note}</p>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Chip
+          label={
+            p.c2pa_present
+              ? p.c2pa_ai_declared
+                ? `C2PA · AI${p.digital_source_type ? ` (${p.digital_source_type})` : ""}`
+                : "C2PA present"
+              : "No C2PA"
+          }
+          tone={p.c2pa_present ? (p.c2pa_ai_declared ? "danger" : "cyan") : "muted"}
+        />
+        {p.ai_markers.map((m, i) => (
+          <Chip key={i} label={m} tone="amber" />
+        ))}
+      </div>
+
+      {p.generation_hints.length > 0 && (
+        <div className="mt-3 space-y-1">
+          {p.generation_hints.slice(0, 6).map((h, i) => (
+            <div key={i} className="flex gap-2 text-[11px]">
+              <span className="w-28 shrink-0 truncate font-mono text-white/35">
+                {h.label}
+              </span>
+              <span className="truncate text-white/60">{h.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="mt-3 text-[10px] leading-relaxed text-white/30">
+        Reads embedded metadata / C2PA only — easily stripped (screenshots,
+        re-saves), and NOT an invisible-watermark (e.g. SynthID) detector.
+      </p>
+    </div>
+  );
+}
+
+function verdictTone(v: ProvenanceResult["verdict"]): {
+  label: string;
+  badge: string;
+} {
+  switch (v) {
+    case "ai-declared":
+      return { label: "AI DECLARED", badge: "border-red-500/30 bg-red-500/15 text-red-300" };
+    case "ai-signals":
+      return { label: "AI SIGNALS", badge: "border-amber-400/30 bg-amber-400/15 text-amber-200" };
+    case "edited":
+      return { label: "EDITED", badge: "border-white/15 bg-white/10 text-white/60" };
+    case "clean":
+      return { label: "NO AI MARKERS", badge: "border-emerald-400/30 bg-emerald-400/15 text-emerald-200" };
+    default:
+      return { label: "NO METADATA", badge: "border-white/15 bg-white/10 text-white/50" };
+  }
+}
+
+function Chip({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "danger" | "amber" | "cyan" | "muted";
+}) {
+  const cls =
+    tone === "danger"
+      ? "border-red-500/30 bg-red-500/10 text-red-300"
+      : tone === "amber"
+        ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
+        : tone === "cyan"
+          ? "border-accent/40 bg-accent/10 text-accent"
+          : "border-white/10 bg-white/5 text-white/40";
+  return <span className={`rounded-md border px-2 py-0.5 text-[11px] ${cls}`}>{label}</span>;
 }
 
 // --- Primitives ------------------------------------------------------------

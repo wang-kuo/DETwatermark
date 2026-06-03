@@ -84,10 +84,42 @@ export interface FaceResult {
   mock: boolean;
 }
 
+// --- Provenance (local, no-API: C2PA byte-sniff + EXIF/XMP/IPTC + AI markers).
+// Ported from MIT github.com/863401402/image-provenance. Reads what a file
+// *declares* — not a real invisible-watermark/SynthID decoder, and strippable.
+
+export type ProvenanceConfidence = "strong" | "medium" | "weak" | "info";
+
+export interface ProvenanceMarker {
+  id: string;
+  title: string;
+  category: "c2pa" | "metadata" | "ai" | "edit";
+  hit: boolean;
+  confidence: ProvenanceConfidence | null;
+  detail: string;
+}
+
+export interface ProvenanceResult {
+  /** False if the read failed. */
+  available: boolean;
+  c2pa_present: boolean;
+  /** C2PA DigitalSourceType is an AI/algorithmic type. */
+  c2pa_ai_declared: boolean;
+  digital_source_type: string | null;
+  metadata_ai_hit: boolean;
+  ai_markers: string[];
+  markers: ProvenanceMarker[];
+  generation_hints: { label: string; value: string }[];
+  verdict: "ai-declared" | "ai-signals" | "edited" | "clean" | "no-metadata";
+  note: string;
+}
+
 export interface DetectionResponse {
   cached: boolean;
   image_hash: string;
   genai_result: GenaiResult;
   face_result: FaceResult;
   watermark_result: WatermarkResult;
+  /** Local metadata/C2PA provenance — recomputed each request, not persisted. */
+  provenance: ProvenanceResult;
 }
