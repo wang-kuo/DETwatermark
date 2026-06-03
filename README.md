@@ -1,7 +1,7 @@
 # 图像检测 Demo (DETwatermark)
 
 Next.js (Vercel) + Supabase 全栈 demo。用户凭**邀请码**登录,上传图片后由多模型投票判断
-**可见水印 / AI 生成 / 人脸真伪(真脸 vs 攻击)**,结果以 `sha256` 去重后存入 Supabase。
+**可见水印 / AI 生成 / 人脸真伪(真脸 vs 攻击)/ 溯源(C2PA·元数据)**,结果以 `sha256` 去重后存入 Supabase。
 
 > 设计与取舍详见 [`BLUEPRINT.md`](./BLUEPRINT.md)。
 
@@ -101,6 +101,7 @@ npm run dev
 | AI 生成 / 人脸框 / deepfake | `lib/sightengine.ts` | Sightengine 一次调用合并 `genai + face-attributes + deepfake`。 |
 | 视觉投票(可见水印 + 人脸/光谱/攻击) | `lib/llm.ts` · `lib/analyze.ts` | GPT-4o 与 Gemini 各自给出结构化判断(仅判断是否有可见水印,不猜厂商)。 |
 | 文本裁决(人脸真伪) | `lib/analyze.ts`(DeepSeek) | DeepSeek 仅文本,聚合视觉 / Sightengine 投票裁决真假脸。 |
+| 溯源 / Content Credentials(**本地,无 API**) | `lib/provenance.ts` | C2PA(JUMBF 字节嗅探,presence)+ EXIF/XMP/IPTC(`exifr`)+ AI 工具关键字标记。每次请求在**原始字节**上本地计算(不消耗 API)。移植自 MIT [image-provenance](https://github.com/863401402/image-provenance);只读文件"声明"——可被截图/重存抹掉,**不是** SynthID 等隐形水印检测。 |
 
 **判定规则**:`ai_generated ≥ 0.5` 且检出人脸 ⇒ 直接判**假脸**(代码层硬规则,裁决模型不可推翻);
 否则由 GPT-4o / Gemini / Sightengine 多源**投票**决定是否为攻击(paper / replay / 3D mask),

@@ -17,8 +17,9 @@ import {
 import { sha256 } from "@/lib/hash";
 import { runSightengineSafe } from "@/lib/sightengine";
 import { aggregate, runVisionVotes } from "@/lib/analyze";
-import type { DetectionResponse } from "@/lib/types";
+import type { DetectionResponse, ProvenanceResult } from "@/lib/types";
 import convert from "heic-convert";
+import { runProvenance } from "@/lib/provenance";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // detection calls several external APIs
@@ -73,6 +74,23 @@ export async function POST(req: Request) {
     );
   }
 
+  // Provenance (local, no API). Prefer the CLIENT's read of the ORIGINAL file
+  // (taken before client-side downscaling strips metadata); fall back to reading
+  // the received bytes server-side.
+  let provenance: ProvenanceResult | null = null;
+  const provField = form.get("provenance");
+  if (typeof provField === "string" && provField) {
+    try {
+      const p = JSON.parse(provField);
+      if (p && typeof p.available === "boolean" && Array.isArray(p.markers)) {
+        provenance = p as ProvenanceResult;
+      }
+    } catch {
+      // ignore malformed client provenance
+    }
+  }
+  if (!provenance) provenance = await runProvenance(bytes);
+
   const admin = createSupabaseAdminClient();
 
   // 3. Dedup: same image (any user) is never re-detected — saves API spend.
@@ -100,6 +118,7 @@ export async function POST(req: Request) {
         genai_result: existing.genai_result,
         face_result: existing.face_result,
         watermark_result: existing.watermark_result,
+        provenance,
       };
       return NextResponse.json(cached);
     }
@@ -171,6 +190,7 @@ export async function POST(req: Request) {
     genai_result: sight.genai,
     face_result: face,
     watermark_result: watermark,
+    provenance,
   };
   return NextResponse.json(response);
 }
