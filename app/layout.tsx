@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "图像检测 Demo",
-  description: "上传图片,检测水印 / 人脸 / AI 生成 / spoofing(实验性)",
+  title: "Forensic Image Analyzer",
+  description:
+    "Detect watermarks and their source, AI generation, and real vs. fake faces.",
 };
 
 export default function RootLayout({
@@ -27,7 +28,7 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="flex min-h-screen flex-col">{children}</body>
     </html>
   );
 }
