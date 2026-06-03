@@ -49,6 +49,23 @@ export async function runSightengine(
   return normalize(data);
 }
 
+/**
+ * Never-throwing variant: returns a labelled mock on any error so a single
+ * detector (unsupported format, provider outage, …) can't fail the whole
+ * /api/detect request.
+ */
+export async function runSightengineSafe(
+  bytes: Uint8Array,
+  mimeType: string,
+): Promise<SightengineResult> {
+  try {
+    return await runSightengine(bytes, mimeType);
+  } catch (e) {
+    console.error("Sightengine failed:", e);
+    return mockResult();
+  }
+}
+
 // --- Internal --------------------------------------------------------------
 
 interface SightengineApiResponse {

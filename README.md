@@ -1,7 +1,7 @@
 # 图像检测 Demo (DETwatermark)
 
 Next.js (Vercel) + Supabase 全栈 demo。用户凭**邀请码**登录,上传图片后由多模型投票判断
-**水印(含厂商识别)/ AI 生成 / 人脸真伪(真脸 vs 攻击)**,结果以 `sha256` 去重后存入 Supabase。
+**可见水印 / AI 生成 / 人脸真伪(真脸 vs 攻击)**,结果以 `sha256` 去重后存入 Supabase。
 
 > 设计与取舍详见 [`BLUEPRINT.md`](./BLUEPRINT.md)。
 
@@ -12,7 +12,7 @@ Next.js (Vercel) + Supabase 全栈 demo。用户凭**邀请码**登录,上传图
 | 前端 / 后端 | Next.js 16 (App Router) + TypeScript + Tailwind v4 |
 | 数据库 / 存储 / 认证 | Supabase (Postgres + Storage + Auth) |
 | AI 生成 + 人脸框 + deepfake | Sightengine API |
-| 水印 + 厂商识别 + 人脸真伪 | 多模型投票:GPT-4o + Gemini 2.5 Flash(视觉)+ DeepSeek(文本裁决) |
+| 可见水印 + 人脸真伪 | 多模型投票:GPT-4o + Gemini 2.5 Flash(视觉)+ DeepSeek(文本裁决) |
 
 > 蓝图标的是「Next.js 14+」,这里用 `create-next-app@latest` 生成的是 Next 16 + React 19,
 > 已按 Next 15+ 的 **async `cookies()`** 写法接好 Supabase SSR。
@@ -99,8 +99,8 @@ npm run dev
 | 能力 | 文件 | 说明 |
 |---|---|---|
 | AI 生成 / 人脸框 / deepfake | `lib/sightengine.ts` | Sightengine 一次调用合并 `genai + face-attributes + deepfake`。 |
-| 视觉投票(水印 + 厂商 + 人脸/光谱/攻击) | `lib/llm.ts` · `lib/analyze.ts` | GPT-4o 与 Gemini 各自给出结构化判断。 |
-| 文本裁决(聚合多模型 + 厂商识别) | `lib/analyze.ts`(DeepSeek) | DeepSeek 仅文本,聚合视觉投票并裁决最终水印厂商与真假脸。 |
+| 视觉投票(可见水印 + 人脸/光谱/攻击) | `lib/llm.ts` · `lib/analyze.ts` | GPT-4o 与 Gemini 各自给出结构化判断(仅判断是否有可见水印,不猜厂商)。 |
+| 文本裁决(人脸真伪) | `lib/analyze.ts`(DeepSeek) | DeepSeek 仅文本,聚合视觉 / Sightengine 投票裁决真假脸。 |
 
 **判定规则**:`ai_generated ≥ 0.5` 且检出人脸 ⇒ 直接判**假脸**(代码层硬规则,裁决模型不可推翻);
 否则由 GPT-4o / Gemini / Sightengine 多源**投票**决定是否为攻击(paper / replay / 3D mask),
@@ -142,7 +142,7 @@ lib/
   types.ts                 # 共享结果类型
 components/
   ImageUploader.tsx        # 选图 / 算 hash / 调 /api/detect
-  ResultCard.tsx           # 结果卡片(高亮水印 / 厂商 / 真假脸)
+  ResultCard.tsx           # 结果卡片(高亮水印 / 真假脸)
 supabase/schema.sql        # 建表 + RLS,蓝图 §4
 ```
 
